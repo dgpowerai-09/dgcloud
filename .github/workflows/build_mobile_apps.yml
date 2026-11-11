@@ -51,8 +51,9 @@ jobs:
           mkdir -p build_app/assets
           cp -r client/assets/* build_app/assets/
           
-          # 3. Copy our pubspec.yaml with verified dependencies & launcher icon config
+          # 3. Copy our pubspec.yaml with verified dependencies & Android launcher icon config
           cp client/pubspec.yaml build_app/pubspec.yaml
+          cp client/flutter_launcher_icons_android.yaml build_app/flutter_launcher_icons_android.yaml
           
           # 4. Inject Android Manifest with all background permissions & cleartext HTTP support
           cp client/android/app/src/main/AndroidManifest.xml build_app/android/app/src/main/AndroidManifest.xml
@@ -61,9 +62,9 @@ jobs:
           cd build_app
           echo "flutter.minSdkVersion=21" >> android/local.properties
           
-          # 6. Fetch dependencies, generate app icons, and compile release APK
+          # 6. Fetch dependencies, generate Android launcher icons, and compile release APK
           flutter pub get
-          dart run flutter_launcher_icons
+          dart run flutter_launcher_icons -f flutter_launcher_icons_android.yaml
           flutter build apk --release
 
       - name: Upload Android APK
@@ -99,15 +100,16 @@ jobs:
           mkdir -p build_app/assets
           cp -r client/assets/* build_app/assets/
           
-          # 3. Copy our pubspec.yaml with verified dependencies & launcher icon config
+          # 3. Copy our pubspec.yaml with verified dependencies & iOS launcher icon config
           cp client/pubspec.yaml build_app/pubspec.yaml
+          cp client/flutter_launcher_icons_ios.yaml build_app/flutter_launcher_icons_ios.yaml
           
           # 4. Inject iOS permissions, ATS HTTP support & background fetch in Info.plist
           cp client/ios/Runner/Info.plist build_app/ios/Runner/Info.plist
           
           cd build_app
           flutter pub get
-          dart run flutter_launcher_icons
+          dart run flutter_launcher_icons -f flutter_launcher_icons_ios.yaml
           
           # 5. Build iOS app in release mode without code signing requirement
           flutter build ios --release --no-codesign
