@@ -22,14 +22,14 @@ jobs:
   build-android:
     name: Build Android Release APK
     if: github.event_name == 'push' || github.event.inputs.platform != 'ios'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -46,10 +46,12 @@ jobs:
           # 1. Generate clean official Flutter Android scaffold
           flutter create --org com.dgcloud --project-name dgcloud_client --platforms=android build_app
           
-          # 2. Inject our production Dart code
+          # 2. Inject our production Dart code and brand assets
           cp -r client/lib/* build_app/lib/
+          mkdir -p build_app/assets
+          cp -r client/assets/* build_app/assets/
           
-          # 3. Copy our pubspec.yaml with verified dependencies
+          # 3. Copy our pubspec.yaml with verified dependencies & launcher icon config
           cp client/pubspec.yaml build_app/pubspec.yaml
           
           # 4. Inject Android Manifest with all background permissions & cleartext HTTP support
@@ -59,12 +61,13 @@ jobs:
           cd build_app
           echo "flutter.minSdkVersion=21" >> android/local.properties
           
-          # 6. Fetch dependencies and compile release APK
+          # 6. Fetch dependencies, generate app icons, and compile release APK
           flutter pub get
+          dart run flutter_launcher_icons
           flutter build apk --release
 
       - name: Upload Android APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: DGCloud-Android-APK
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
@@ -77,7 +80,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -91,10 +94,12 @@ jobs:
           # 1. Generate clean official Flutter iOS scaffold
           flutter create --org com.dgcloud --project-name dgcloud_client --platforms=ios build_app
           
-          # 2. Inject our production Dart code
+          # 2. Inject our production Dart code and brand assets
           cp -r client/lib/* build_app/lib/
+          mkdir -p build_app/assets
+          cp -r client/assets/* build_app/assets/
           
-          # 3. Copy our pubspec.yaml with verified dependencies
+          # 3. Copy our pubspec.yaml with verified dependencies & launcher icon config
           cp client/pubspec.yaml build_app/pubspec.yaml
           
           # 4. Inject iOS permissions, ATS HTTP support & background fetch in Info.plist
@@ -102,6 +107,7 @@ jobs:
           
           cd build_app
           flutter pub get
+          dart run flutter_launcher_icons
           
           # 5. Build iOS app in release mode without code signing requirement
           flutter build ios --release --no-codesign
@@ -113,7 +119,7 @@ jobs:
           zip -r DGCloud_iOS.ipa Payload
 
       - name: Upload iOS IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: DGCloud-iOS-IPA
           path: build_app/build/ios/iphoneos/DGCloud_iOS.ipa

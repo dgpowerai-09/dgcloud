@@ -20,15 +20,108 @@ class ApiService {
     return prefs.getString('server_url') ?? _defaultBaseUrl;
   }
 
-  static Future<void> setBaseUrl(String url) async {
-    final prefs = await SharedPreferences.getInstance();
+  static String normalizeServerUrl(String url) {
     var normalized = url.trim().replaceAll(RegExp(r'/+$'), '');
     if (normalized.isNotEmpty &&
         !normalized.startsWith('http://') &&
         !normalized.startsWith('https://')) {
       normalized = 'http://$normalized';
     }
-    await prefs.setString('server_url', normalized);
+    return normalized;
+  }
+
+  static Future<void> setBaseUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('server_url', normalizeServerUrl(url));
+  }
+
+  static Future<Map<String, dynamic>> _authRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final baseUrl = await getBaseUrl();
+    final token = await getToken();
+    if (baseUrl.isEmpty || token == null) {
+      throw UnauthorizedException();
+    }
+
+    final uri = Uri.parse('$baseUrl$path');
+    final headers = <String, String>{'Authorization': 'Bearer $token'};
+    if (body != null) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    final encodedBody = body != null ? jsonEncode(body) : null;
+    late final http.Response response;
+    switch (method.toUpperCase()) {
+      case 'GET':
+        response = await http.get(uri, headers: headers).timeout(timeout);
+        break;
+      case 'POST':
+        response = await http
+            .post(uri, headers: headers, body: encodedBody)
+            .timeout(timeout);
+        break;
+      case 'PATCH':
+        response = await http
+            .patch(uri, headers: headers, body: encodedBody)
+            .timeout(timeout);
+        break;
+      case 'PUT':
+        response = await http
+            .put(uri, headers: headers, body: encodedBody)
+            .timeout(timeout);
+        break;
+      case 'DELETE':
+        response = await http.delete(uri, headers: headers).timeout(timeout);
+        break;
+      default:
+        throw ArgumentError('Unsupported HTTP method: $method');
+    }
+
+    if (response.statusCode == 401) {
+      throw UnauthorizedException();
+    }
+
+    final parsed = response.body.isNotEmpty
+        ? jsonDecode(response.body) as Map<String, dynamic>
+        : <String, dynamic>{};
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(parsed['error'] ?? 'Request failed (HTTP ${response.statusCode})');
+    }
+    return parsed;
+  }
+
+  static Future<Map<String, dynamic>> _publicPost(
+    String path,
+    Map<String, dynamic> body, {
+    String? serverUrl,
+  }) async {
+    final rawBase = serverUrl != null && serverUrl.trim().isNotEmpty
+        ? normalizeServerUrl(serverUrl)
+        : await getBaseUrl();
+    if (rawBase.isEmpty) {
+      throw Exception('Please enter a valid Server Address');
+    }
+
+    final response = await http
+        .post(
+          Uri.parse('$rawBase$path'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    final parsed = response.body.isNotEmpty
+        ? jsonDecode(response.body) as Map<String, dynamic>
+        : <String, dynamic>{};
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(parsed['error'] ?? 'Request failed (HTTP ${response.statusCode})');
+    }
+    return parsed;
   }
 
   static Future<String?> getToken() async {
@@ -96,80 +189,179 @@ class ApiService {
 
   // Fetch all user files from DG Cloud
   static Future<List<Map<String, dynamic>>> getFiles({String? deviceId}) async {
-    final baseUrl = await getBaseUrl();
-    final token = await getToken();
-    if (baseUrl.isEmpty || token == null) {
-      throw UnauthorizedException();
-    }
-
-    final uri = deviceId != null
-        ? Uri.parse('$baseUrl/api/v1/files?deviceId=$deviceId')
-        : Uri.parse('$baseUrl/api/v1/files');
-
-    final response = await http
-        .get(uri, headers: {'Authorization': 'Bearer $token'})
-        .timeout(const Duration(seconds: 15));
-
-    if (response.statusCode == 401) {
-      throw UnauthorizedException();
-    }
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load files (HTTP ${response.statusCode})');
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final path = deviceId != null ? '/api/v1/files?deviceId=$deviceId' : '/api/v1/files';
+    final data = await _authRequest('GET', path);
     final list = data['files'] as List<dynamic>? ?? [];
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  // Delete a file cleanly from cloud vault
+  static Future<Map<String, dynamic>> deleteFile(String fileId) async {
+    return _authRequest('DELETE', '/api/v1/files/$fileId');
+  }
+
+  // Rename a file in cloud vault
+  static Future<Map<String, dynamic>> renameFile(String fileId, String newFileName) async {
+    return _authRequest('PATCH', '/api/v1/files/$fileId', body: {'fileName': newFileName});
+  }
+
   // Fetch Cloud Storage Quota & Volumes
   static Future<Map<String, dynamic>> getStorageStatus() async {
-    final baseUrl = await getBaseUrl();
-    final token = await getToken();
-    if (baseUrl.isEmpty || token == null) {
-      throw UnauthorizedException();
-    }
+    return _authRequest('GET', '/api/v1/storage/status');
+  }
 
-    final response = await http
-        .get(
-          Uri.parse('$baseUrl/api/v1/storage/status'),
-          headers: {'Authorization': 'Bearer $token'},
-        )
-        .timeout(const Duration(seconds: 15));
+  // Mount new local storage drive / volume
+  static Future<Map<String, dynamic>> addStorageVolume({
+    required String volumeName,
+    required String mountPath,
+  }) async {
+    return _authRequest(
+      'POST',
+      '/api/v1/storage/volumes',
+      body: {'volumeName': volumeName, 'mountPath': mountPath},
+    );
+  }
 
-    if (response.statusCode == 401) {
-      throw UnauthorizedException();
-    }
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load storage status');
-    }
+  // Run Storage Cleaner & Duplicate Scanner
+  static Future<Map<String, dynamic>> scanDuplicates({String? targetPath}) async {
+    return _authRequest(
+      'POST',
+      '/api/v1/cleaner/scan',
+      body: targetPath != null && targetPath.isNotEmpty ? {'targetPath': targetPath} : {},
+      timeout: const Duration(seconds: 60),
+    );
+  }
 
-    return jsonDecode(response.body) as Map<String, dynamic>;
+  // Fetch Security & Recovery Configuration Status
+  static Future<Map<String, dynamic>> getSecurityStatus() async {
+    return _authRequest('GET', '/api/v1/auth/security/status');
+  }
+
+  // Change password for authenticated account
+  static Future<Map<String, dynamic>> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    return _authRequest(
+      'POST',
+      '/api/v1/auth/change-password',
+      body: {'currentPassword': currentPassword, 'newPassword': newPassword},
+    );
+  }
+
+  // Begin 2FA Authenticator Setup
+  static Future<Map<String, dynamic>> setupTotp() async {
+    return _authRequest('POST', '/api/v1/auth/totp/setup');
+  }
+
+  // Verify 6-digit code and link 2FA Authenticator to Encryption Vault
+  static Future<Map<String, dynamic>> enableTotp({
+    required String secret,
+    required String code,
+    required String password,
+  }) async {
+    return _authRequest(
+      'POST',
+      '/api/v1/auth/totp/enable',
+      body: {'secret': secret, 'code': code, 'password': password},
+    );
+  }
+
+  // Configure & Test Telegram Bot Recovery & Security Alerts
+  static Future<Map<String, dynamic>> setupTelegram({
+    required String botToken,
+    required String chatId,
+    required String currentPassword,
+    bool alertsEnabled = true,
+  }) async {
+    return _authRequest(
+      'POST',
+      '/api/v1/auth/telegram/setup',
+      body: {
+        'botToken': botToken,
+        'chatId': chatId,
+        'currentPassword': currentPassword,
+        'alertsEnabled': alertsEnabled,
+      },
+    );
+  }
+
+  // Unlink Telegram Recovery & Alerts
+  static Future<Map<String, dynamic>> unlinkTelegram() async {
+    return _authRequest('POST', '/api/v1/auth/telegram/unlink');
+  }
+
+  // Account Recovery: Emergency Recovery Key
+  static Future<Map<String, dynamic>> recoverWithKey({
+    String? serverUrl,
+    required String username,
+    required String recoveryKey,
+    required String newPassword,
+  }) async {
+    return _publicPost(
+      '/api/v1/auth/recover',
+      {
+        'username': username,
+        'recoveryKey': recoveryKey,
+        'newPassword': newPassword,
+      },
+      serverUrl: serverUrl,
+    );
+  }
+
+  // Account Recovery: 2FA Authenticator Secret + 6-Digit Code
+  static Future<Map<String, dynamic>> recoverWithTotp({
+    String? serverUrl,
+    required String username,
+    required String totpSecret,
+    required String code,
+    required String newPassword,
+  }) async {
+    return _publicPost(
+      '/api/v1/auth/totp/recover',
+      {
+        'username': username,
+        'totpSecret': totpSecret,
+        'code': code,
+        'newPassword': newPassword,
+      },
+      serverUrl: serverUrl,
+    );
+  }
+
+  // Account Recovery: Request 6-digit OTP via Telegram Bot
+  static Future<Map<String, dynamic>> requestTelegramReset({
+    String? serverUrl,
+    required String username,
+  }) async {
+    return _publicPost(
+      '/api/v1/auth/telegram/request-reset',
+      {'username': username},
+      serverUrl: serverUrl,
+    );
+  }
+
+  // Account Recovery: Confirm Telegram OTP and set new password
+  static Future<Map<String, dynamic>> resetWithTelegramOtp({
+    String? serverUrl,
+    required String username,
+    required String otpCode,
+    required String newPassword,
+  }) async {
+    return _publicPost(
+      '/api/v1/auth/telegram/reset',
+      {
+        'username': username,
+        'otpCode': otpCode,
+        'newPassword': newPassword,
+      },
+      serverUrl: serverUrl,
+    );
   }
 
   // Fetch Connected Devices
   static Future<List<Map<String, dynamic>>> getDevices() async {
-    final baseUrl = await getBaseUrl();
-    final token = await getToken();
-    if (baseUrl.isEmpty || token == null) {
-      throw UnauthorizedException();
-    }
-
-    final response = await http
-        .get(
-          Uri.parse('$baseUrl/api/v1/devices'),
-          headers: {'Authorization': 'Bearer $token'},
-        )
-        .timeout(const Duration(seconds: 15));
-
-    if (response.statusCode == 401) {
-      throw UnauthorizedException();
-    }
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load devices');
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = await _authRequest('GET', '/api/v1/devices');
     final list = data['devices'] as List<dynamic>? ?? [];
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }

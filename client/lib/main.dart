@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'services/api_service.dart';
 import 'services/sync_engine.dart';
 
@@ -308,19 +309,35 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF3B82F6).withAlpha(30),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: const Color(0xFF3B82F6).withAlpha(100),
-                      width: 2,
-                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF3B82F6).withAlpha(70),
+                        blurRadius: 24,
+                        spreadRadius: 2,
+                      ),
+                    ],
                   ),
-                  child: const Icon(
-                    Icons.cloud_done_rounded,
-                    size: 56,
-                    color: Color(0xFF3B82F6),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Image.asset(
+                      'assets/app_icon.png',
+                      width: 92,
+                      height: 92,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 92,
+                        height: 92,
+                        padding: const EdgeInsets.all(18),
+                        color: const Color(0xFF172036),
+                        child: const Icon(
+                          Icons.cloud_done_rounded,
+                          size: 54,
+                          color: Color(0xFF3B82F6),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -424,6 +441,29 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 12),
+                        TextButton.icon(
+                          onPressed: _isSubmitting
+                              ? null
+                              : () {
+                                  showModalBottomSheet(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    backgroundColor: const Color(0xFF172036),
+                                    shape: const RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.vertical(
+                                        top: Radius.circular(22),
+                                      ),
+                                    ),
+                                    builder: (_) => _ForgotPasswordSheet(
+                                      initialServerUrl: _serverUrlController.text.trim(),
+                                      initialUsername: _usernameController.text.trim(),
+                                    ),
+                                  );
+                                },
+                          icon: const Icon(Icons.lock_reset_rounded, size: 18),
+                          label: const Text('Forgot Password? Recover Account'),
+                        ),
                       ],
                     ),
                   ),
@@ -456,8 +496,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Map<String, dynamic>> _allFiles = [];
   List<Map<String, dynamic>> _devices = [];
   Map<String, dynamic>? _storageStatus;
+  Map<String, dynamic>? _securityStatus;
   String _searchQuery = '';
   String _selectedCategory = 'All';
+  String? _selectedDeviceId;
+  String? _selectedDeviceName;
   String _baseUrl = '';
   String _token = '';
   String _username = 'Owner';
@@ -504,16 +547,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final filesFuture = ApiService.getFiles();
       final statusFuture = ApiService.getStorageStatus();
       final devicesFuture = ApiService.getDevices();
+      final securityFuture = ApiService.getSecurityStatus()
+          .then<Map<String, dynamic>?>((v) => v)
+          .catchError((_) => null);
 
       final files = await filesFuture;
       final status = await statusFuture;
       final devices = await devicesFuture;
+      final security = await securityFuture;
 
       if (!mounted) return;
       setState(() {
         _allFiles = files;
         _storageStatus = status;
         _devices = devices;
+        _securityStatus = security;
         _isLoadingFiles = false;
       });
     } on UnauthorizedException {
@@ -535,12 +583,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _allFiles.where((f) {
       final name = (f['file_name'] ?? '').toString();
       final mime = (f['mime_type'] ?? '').toString();
+      final devId = (f['device_id'] ?? '').toString();
       final matchesSearch = _searchQuery.isEmpty ||
           name.toLowerCase().contains(_searchQuery.toLowerCase());
       final category = detectCategory(name, mime);
       final matchesCat =
           _selectedCategory == 'All' || category == _selectedCategory;
-      return matchesSearch && matchesCat;
+      final matchesDevice = _selectedDeviceId == null || devId == _selectedDeviceId;
+      return matchesSearch && matchesCat && matchesDevice;
     }).toList();
   }
 
@@ -658,6 +708,117 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _renameCloudFile(Map<String, dynamic> file) async {
+    final currentName = (file['file_name'] ?? '').toString();
+    final ctrl = TextEditingController(text: currentName);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF172036),
+        title: const Text('Rename File', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            labelText: 'New File Name',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF3B82F6),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Save', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+
+    if (newName == null || newName.isEmpty || newName == currentName) return;
+
+    try {
+      await ApiService.renameFile(file['id'].toString(), newName);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Renamed to $newName'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      await _refreshAllData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceAll('Exception: ', '')),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
+  }
+
+  Future<bool> _deleteCloudFile(Map<String, dynamic> file) async {
+    final name = (file['file_name'] ?? 'this file').toString();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF172036),
+        title: const Text('Delete File?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to permanently delete "$name"?',
+          style: const TextStyle(color: Color(0xFFD1D5DB)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return false;
+
+    try {
+      await ApiService.deleteFile(file['id'].toString());
+      if (!mounted) return true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted "$name"'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      await _refreshAllData();
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceAll('Exception: ', '')),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+      return false;
+    }
+  }
+
   void _openFilePreviewOrSheet(Map<String, dynamic> file) {
     final name = (file['file_name'] ?? '').toString();
     final mime = (file['mime_type'] ?? '').toString();
@@ -668,10 +829,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final imageUrl = '$_baseUrl/api/v1/files/$fileId/stream?token=$_token';
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => PhotoViewerScreen(
+          builder: (viewerCtx) => PhotoViewerScreen(
             fileName: name,
             imageUrl: imageUrl,
             onDownload: () => _downloadCloudFile(file),
+            onDelete: () async {
+              final deleted = await _deleteCloudFile(file);
+              if (deleted && viewerCtx.mounted) {
+                Navigator.of(viewerCtx).pop();
+              }
+            },
           ),
         ),
       );
@@ -728,7 +895,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _DetailRow(label: 'Uploaded From', value: deviceName),
               _DetailRow(label: 'Storage Location', value: lifecycle),
               _DetailRow(label: 'Uploaded At', value: createdAt),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF3B82F6),
@@ -744,7 +911,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _downloadCloudFile(file);
                 },
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.edit_rounded, size: 18),
+                      label: const Text('Rename'),
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _renameCloudFile(file);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFEF4444),
+                        side: const BorderSide(color: Color(0xFFEF4444)),
+                      ),
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                      label: const Text('Delete'),
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _deleteCloudFile(file);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
             ],
           ),
         );
@@ -830,7 +1027,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            const Icon(Icons.cloud_done_rounded, color: Color(0xFF3B82F6), size: 24),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: Image.asset(
+                'assets/app_icon.png',
+                width: 28,
+                height: 28,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.cloud_done_rounded,
+                  color: Color(0xFF3B82F6),
+                  size: 24,
+                ),
+              ),
+            ),
             const SizedBox(width: 10),
             Text(
               titles[_selectedTab],
@@ -1024,6 +1234,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
 
+          // Active Device Filter Chip
+          if (_selectedDeviceId != null) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF3B82F6).withAlpha(35),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF3B82F6).withAlpha(110)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.smartphone_rounded, size: 18, color: Color(0xFF60A5FA)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Device filter: ${_selectedDeviceName ?? "Selected Device"}',
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _selectedDeviceId = null;
+                        _selectedDeviceName = null;
+                      });
+                    },
+                    child: const Text('Show All'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           // Category Filter Chips
           SizedBox(
             height: 38,
@@ -1179,10 +1423,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.download_for_offline_rounded, color: Color(0xFF3B82F6)),
-          tooltip: 'Download',
-          onPressed: () => _downloadCloudFile(file),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.download_for_offline_rounded, color: Color(0xFF3B82F6)),
+              tooltip: 'Download',
+              onPressed: () => _downloadCloudFile(file),
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF9CA3AF)),
+              color: const Color(0xFF1E293B),
+              onSelected: (action) {
+                if (action == 'download') _downloadCloudFile(file);
+                if (action == 'rename') _renameCloudFile(file);
+                if (action == 'delete') _deleteCloudFile(file);
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'download',
+                  child: Row(
+                    children: [
+                      Icon(Icons.download_rounded, size: 18, color: Color(0xFF60A5FA)),
+                      SizedBox(width: 8),
+                      Text('Download'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'rename',
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit_rounded, size: 18, color: Colors.white),
+                      SizedBox(width: 8),
+                      Text('Rename'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline_rounded, size: 18, color: Color(0xFFEF4444)),
+                      SizedBox(width: 8),
+                      Text('Delete', style: TextStyle(color: Color(0xFFEF4444))),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -1315,20 +1605,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ===========================================================================
-  // TAB 2: STORAGE QUOTA, DEVICES & ACCOUNT
+  // TAB 2: STORAGE, SECURITY, DEVICES & ACCOUNT SETTINGS
   // ===========================================================================
+  void _openModalSheet(Widget sheet) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF172036),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) => sheet,
+    );
+  }
+
   Widget _buildStorageTab() {
     final userStats = _storageStatus?['userStats'] as Map<String, dynamic>?;
     final totalBytes = (userStats?['total_user_bytes'] as num?)?.toInt() ?? 0;
-    final totalFiles = (userStats?['total_files'] as num?)?.toInt() ?? 0;
+    final totalFiles = (userStats?['total_files'] as num?)?.toInt() ?? _allFiles.length;
     final quotaBytes = (_storageStatus?['cloudQuotaBytes'] as num?)?.toInt() ?? 161061273600;
-    final usedPercent = quotaBytes > 0 ? ((totalBytes / quotaBytes) * 100).clamp(0, 100) : 0;
+    final usedPercent = quotaBytes > 0 ? ((totalBytes / quotaBytes) * 100).clamp(0.0, 100.0) : 0.0;
+    final volumes = (_storageStatus?['volumes'] as List<dynamic>? ?? [])
+        .map((v) => Map<String, dynamic>.from(v as Map))
+        .toList();
+
+    final totpEnabled = _securityStatus?['totpEnabled'] == true;
+    final tgMap = _securityStatus?['telegram'] as Map<String, dynamic>?;
+    final tgLinked = tgMap?['linked'] == true;
+    final tgMaskedChat = tgMap?['maskedChatId']?.toString();
 
     return RefreshIndicator(
       onRefresh: _refreshAllData,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 36),
         children: [
+          // Profile Hero Card
           Card(
             child: Padding(
               padding: const EdgeInsets.all(18),
@@ -1337,32 +1648,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: const Color(0xFF3B82F6).withAlpha(40),
-                        child: const Icon(Icons.person_rounded, color: Color(0xFF3B82F6)),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Image.asset(
+                          'assets/app_icon.png',
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => CircleAvatar(
+                            radius: 22,
+                            backgroundColor: const Color(0xFF3B82F6).withAlpha(40),
+                            child: const Icon(Icons.person_rounded, color: Color(0xFF3B82F6)),
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _username,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _username,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
                             ),
-                          ),
-                          const Text(
-                            'AES-256-GCM Encrypted Private Vault',
-                            style: TextStyle(color: Color(0xFF10B981), fontSize: 12),
-                          ),
-                        ],
+                            const Text(
+                              'AES-256-GCM Encrypted Private Vault',
+                              style: TextStyle(color: Color(0xFF10B981), fontSize: 12),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      _StatusPill(
+                        label: totpEnabled ? '🔐 2FA Active' : '🔐 2FA Not Setup',
+                        isActive: totpEnabled,
+                      ),
+                      _StatusPill(
+                        label: tgLinked ? '✈️ Telegram Linked' : '✈️ Telegram Not Linked',
+                        isActive: tgLinked,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -1395,9 +1732,205 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
 
-          // Server Settings Card
+          // Security & Account Tools (Web Parity)
+          const Text(
+            'Security & Storage Tools',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.cleaning_services_rounded, color: Color(0xFFF59E0B)),
+                  title: const Text(
+                    '🧹 Storage Cleaner & Duplicates',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Scan drives & ZIPs to find duplicate files',
+                    style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
+                  onTap: () => _openModalSheet(const _CleanerModalSheet()),
+                ),
+                const Divider(height: 1, color: Color(0x14FFFFFF)),
+                ListTile(
+                  leading: Icon(
+                    Icons.security_rounded,
+                    color: totpEnabled ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                  ),
+                  title: const Text(
+                    '🔐 2FA Security (Authenticator App)',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    totpEnabled
+                        ? 'Active (Google / Microsoft Authenticator)'
+                        : 'Tap to activate fail-safe 2FA backup',
+                    style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
+                  onTap: () => _openModalSheet(
+                    _TotpSetupSheet(
+                      isAlreadyEnabled: totpEnabled,
+                      onActivated: _refreshAllData,
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, color: Color(0x14FFFFFF)),
+                ListTile(
+                  leading: const Icon(Icons.key_rounded, color: Color(0xFF60A5FA)),
+                  title: const Text(
+                    '🔑 Change Account Password',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Re-encrypt vault safely with a new password',
+                    style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
+                  onTap: () => _openModalSheet(const _ChangePasswordSheet()),
+                ),
+                const Divider(height: 1, color: Color(0x14FFFFFF)),
+                ListTile(
+                  leading: Icon(
+                    Icons.send_rounded,
+                    color: tgLinked ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                  ),
+                  title: const Text(
+                    '✈️ Telegram Recovery & Alerts',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    tgLinked
+                        ? 'Linked ($tgMaskedChat) • Instant OTP reset'
+                        : 'Link personal Telegram Bot for OTP reset & alerts',
+                    style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
+                  onTap: () => _openModalSheet(
+                    _TelegramSetupSheet(
+                      isLinked: tgLinked,
+                      maskedChatId: tgMaskedChat,
+                      onUpdated: _refreshAllData,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+
+          // My Devices Section (Tap device to browse its files)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'My Devices',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              Text(
+                'Tap device to browse',
+                style: TextStyle(color: Colors.blue.shade300, fontSize: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_devices.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('No devices found.', style: TextStyle(color: Color(0xFF9CA3AF))),
+              ),
+            )
+          else
+            ..._devices.map(
+              (d) {
+                final dName = (d['device_name'] ?? 'Unknown Device').toString();
+                final dType = (d['device_type'] ?? 'mobile').toString();
+                final isSelected = _selectedDeviceId == d['id']?.toString();
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: const Color(0xFF10B981).withAlpha(35),
+                      child: Icon(
+                        dType == 'web' || dType == 'windows'
+                            ? Icons.computer_rounded
+                            : Icons.smartphone_rounded,
+                        color: const Color(0xFF10B981),
+                      ),
+                    ),
+                    title: Text(
+                      dName,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      '${d['total_files_count'] ?? 0} files  •  ${formatBytes((d['total_used_bytes'] as num?)?.toInt() ?? 0)}',
+                      style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                    ),
+                    trailing: Icon(
+                      isSelected ? Icons.filter_alt_rounded : Icons.folder_open_rounded,
+                      color: isSelected ? const Color(0xFF3B82F6) : const Color(0xFF9CA3AF),
+                    ),
+                    onTap: () {
+                      setState(() {
+                        _selectedDeviceId = d['id']?.toString();
+                        _selectedDeviceName = dName;
+                        _selectedTab = 0;
+                      });
+                    },
+                  ),
+                );
+              },
+            ),
+          const SizedBox(height: 18),
+
+          // Storage Drives / Volumes Section
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Storage Drives & Nodes',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              TextButton.icon(
+                onPressed: () => _openModalSheet(_AddVolumeSheet(onAdded: _refreshAllData)),
+                icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
+                label: const Text('Add Drive'),
+              ),
+            ],
+          ),
+          if (volumes.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(14),
+                child: Text('Primary Cloud Storage active', style: TextStyle(color: Color(0xFF9CA3AF))),
+              ),
+            )
+          else
+            ...volumes.map(
+              (v) => Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: const Icon(Icons.storage_rounded, color: Color(0xFF3B82F6)),
+                  title: Text(
+                    (v['volume_name'] ?? 'Storage Volume').toString(),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    '${v['mount_path'] ?? ''}\nUsed: ${formatBytes((v['used_capacity_bytes'] as num?)?.toInt() ?? 0)}',
+                    style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+          const SizedBox(height: 14),
+
+          // Connected Server Card
           Card(
             child: ListTile(
               leading: const Icon(Icons.dns_rounded, color: Color(0xFF3B82F6)),
@@ -1412,45 +1945,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 22),
 
-          // Connected Devices
-          const Text(
-            'Linked Devices',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-          ),
-          const SizedBox(height: 8),
-          if (_devices.isEmpty)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('No devices found.', style: TextStyle(color: Color(0xFF9CA3AF))),
-              ),
-            )
-          else
-            ..._devices.map(
-              (d) => Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: Icon(
-                    (d['device_type'] ?? '') == 'web'
-                        ? Icons.computer_rounded
-                        : Icons.smartphone_rounded,
-                    color: const Color(0xFF10B981),
-                  ),
-                  title: Text(
-                    (d['device_name'] ?? 'Unknown Device').toString(),
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(
-                    '${d['total_files_count'] ?? 0} files  •  ${formatBytes((d['total_used_bytes'] as num?)?.toInt() ?? 0)}',
-                    style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
-                  ),
-                ),
-              ),
-            ),
-
-          const SizedBox(height: 24),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFFEF4444),
@@ -1527,18 +2023,20 @@ class _DetailRow extends StatelessWidget {
 }
 
 // =============================================================================
-// IN-APP PHOTO PREVIEWER WITH ZOOM & DOWNLOAD
+// IN-APP PHOTO PREVIEWER WITH ZOOM, DOWNLOAD & DELETE
 // =============================================================================
 class PhotoViewerScreen extends StatelessWidget {
   final String fileName;
   final String imageUrl;
   final VoidCallback onDownload;
+  final Future<void> Function()? onDelete;
 
   const PhotoViewerScreen({
     super.key,
     required this.fileName,
     required this.imageUrl,
     required this.onDownload,
+    this.onDelete,
   });
 
   @override
@@ -1558,6 +2056,12 @@ class PhotoViewerScreen extends StatelessWidget {
             tooltip: 'Download Photo',
             onPressed: onDownload,
           ),
+          if (onDelete != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444)),
+              tooltip: 'Delete Photo',
+              onPressed: () => onDelete!.call(),
+            ),
         ],
       ),
       body: Center(
@@ -1580,6 +2084,1113 @@ class PhotoViewerScreen extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  final String label;
+  final bool isActive;
+
+  const _StatusPill({required this.label, required this.isActive});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isActive ? const Color(0xFF10B981) : const Color(0xFFF59E0B);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withAlpha(110)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// ACCOUNT RECOVERY MODAL (RECOVERY KEY / 2FA TOTP / TELEGRAM OTP)
+// =============================================================================
+class _ForgotPasswordSheet extends StatefulWidget {
+  final String initialServerUrl;
+  final String initialUsername;
+
+  const _ForgotPasswordSheet({
+    required this.initialServerUrl,
+    required this.initialUsername,
+  });
+
+  @override
+  State<_ForgotPasswordSheet> createState() => _ForgotPasswordSheetState();
+}
+
+class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
+  String _method = 'telegram';
+  late final TextEditingController _serverCtrl;
+  late final TextEditingController _userCtrl;
+  final TextEditingController _recoveryKeyCtrl = TextEditingController();
+  final TextEditingController _totpSecretCtrl = TextEditingController();
+  final TextEditingController _codeCtrl = TextEditingController();
+  final TextEditingController _newPwdCtrl = TextEditingController();
+  bool _isBusy = false;
+  String? _infoMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverCtrl = TextEditingController(text: widget.initialServerUrl);
+    _userCtrl = TextEditingController(text: widget.initialUsername);
+  }
+
+  @override
+  void dispose() {
+    _serverCtrl.dispose();
+    _userCtrl.dispose();
+    _recoveryKeyCtrl.dispose();
+    _totpSecretCtrl.dispose();
+    _codeCtrl.dispose();
+    _newPwdCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendTelegramOtp() async {
+    final url = _serverCtrl.text.trim();
+    final user = _userCtrl.text.trim();
+    if (url.isEmpty || user.isEmpty) {
+      setState(() => _infoMessage = 'Enter Server Address and Username first.');
+      return;
+    }
+
+    setState(() {
+      _isBusy = true;
+      _infoMessage = 'Sending OTP to linked Telegram Bot...';
+    });
+
+    try {
+      final res = await ApiService.requestTelegramReset(serverUrl: url, username: user);
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _infoMessage = res['message']?.toString() ?? 'OTP sent to Telegram!';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _infoMessage = e.toString().replaceAll('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _submitReset() async {
+    final url = _serverCtrl.text.trim();
+    final user = _userCtrl.text.trim();
+    final newPwd = _newPwdCtrl.text;
+
+    if (url.isEmpty || user.isEmpty || newPwd.length < 6) {
+      setState(() => _infoMessage = 'Enter server URL, username & password (6+ chars).');
+      return;
+    }
+
+    setState(() {
+      _isBusy = true;
+      _infoMessage = null;
+    });
+
+    try {
+      if (_method == 'telegram') {
+        await ApiService.resetWithTelegramOtp(
+          serverUrl: url,
+          username: user,
+          otpCode: _codeCtrl.text.trim(),
+          newPassword: newPwd,
+        );
+      } else if (_method == 'key') {
+        await ApiService.recoverWithKey(
+          serverUrl: url,
+          username: user,
+          recoveryKey: _recoveryKeyCtrl.text.trim(),
+          newPassword: newPwd,
+        );
+      } else {
+        await ApiService.recoverWithTotp(
+          serverUrl: url,
+          username: user,
+          totpSecret: _totpSecretCtrl.text.trim(),
+          code: _codeCtrl.text.trim(),
+          newPassword: newPwd,
+        );
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Password reset successfully! Please sign in.'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _infoMessage = e.toString().replaceAll('Exception: ', '');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Recover Account Password',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Preserves your AES-256 Master Key so existing encrypted files remain readable.',
+              style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('Telegram OTP'),
+                  selected: _method == 'telegram',
+                  onSelected: (_) => setState(() => _method = 'telegram'),
+                ),
+                ChoiceChip(
+                  label: const Text('Recovery Key'),
+                  selected: _method == 'key',
+                  onSelected: (_) => setState(() => _method = 'key'),
+                ),
+                ChoiceChip(
+                  label: const Text('2FA App'),
+                  selected: _method == 'totp',
+                  onSelected: (_) => setState(() => _method = 'totp'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _serverCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Server Address',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _userCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Username',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_method == 'telegram') ...[
+              OutlinedButton.icon(
+                onPressed: _isBusy ? null : _sendTelegramOtp,
+                icon: const Icon(Icons.send_rounded, size: 18),
+                label: const Text('Send 6-Digit OTP to Telegram'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _codeCtrl,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: '6-Digit Telegram OTP Code',
+                  border: OutlineInputBorder(),
+                  counterText: '',
+                ),
+              ),
+            ] else if (_method == 'key') ...[
+              TextField(
+                controller: _recoveryKeyCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Emergency Recovery Key (DG-XXXX-...)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ] else ...[
+              TextField(
+                controller: _totpSecretCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Authenticator Base32 Secret Key',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _codeCtrl,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Current 6-Digit 2FA Code',
+                  border: OutlineInputBorder(),
+                  counterText: '',
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: _newPwdCtrl,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'New Password (min 6 characters)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_infoMessage != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _infoMessage!,
+                style: const TextStyle(color: Color(0xFF93C5FD), fontSize: 13),
+              ),
+            ],
+            const SizedBox(height: 16),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B82F6),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _isBusy ? null : _submitReset,
+              child: Text(
+                _isBusy ? 'Processing...' : 'Reset Password',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// STORAGE CLEANER & DUPLICATE SCANNER MODAL
+// =============================================================================
+class _CleanerModalSheet extends StatefulWidget {
+  const _CleanerModalSheet();
+
+  @override
+  State<_CleanerModalSheet> createState() => _CleanerModalSheetState();
+}
+
+class _CleanerModalSheetState extends State<_CleanerModalSheet> {
+  bool _isScanning = false;
+  Map<String, dynamic>? _report;
+  String? _error;
+
+  Future<void> _runScan() async {
+    setState(() {
+      _isScanning = true;
+      _error = null;
+    });
+
+    try {
+      final res = await ApiService.scanDuplicates();
+      if (!mounted) return;
+      setState(() {
+        _report = res;
+        _isScanning = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isScanning = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sets = (_report?['duplicateSets'] as List<dynamic>? ?? []);
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.78),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '🧹 Storage Cleaner & Duplicates',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Scans mounted cloud & local storage drives plus ZIP archives to find duplicate files.',
+              style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B82F6),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _isScanning ? null : _runScan,
+              icon: _isScanning
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.search_rounded, color: Colors.white),
+              label: Text(
+                _isScanning ? 'Scanning Storage...' : 'Start Deep Duplicate Scan',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: Color(0xFFEF4444))),
+            ],
+            if (_report != null) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withAlpha(28),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF10B981).withAlpha(90)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Scanned ${_report!['scannedTotalFiles'] ?? 0} files',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Duplicate groups: ${_report!['duplicateGroupsCount'] ?? 0}  •  Reclaimable: ${_report!['totalReclaimableMB'] ?? '0.00'} MB',
+                      style: const TextStyle(color: Color(0xFF6EE7B7), fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (sets.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Text(
+                    '🎉 Awesome! Zero duplicate files detected on storage.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF9CA3AF)),
+                  ),
+                )
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: sets.length,
+                    itemBuilder: (_, idx) {
+                      final entry = sets[idx] as Map<String, dynamic>;
+                      final paths = (entry['files'] as List<dynamic>? ?? []);
+                      final size = (entry['size'] as num?)?.toInt() ?? 0;
+                      return Card(
+                        color: const Color(0xFF0F172A),
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Group #${idx + 1} (${formatBytes(size)} each)',
+                                style: const TextStyle(
+                                  color: Color(0xFFF59E0B),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              ...paths.map(
+                                (p) => Text(
+                                  '• $p',
+                                  style: const TextStyle(color: Color(0xFFD1D5DB), fontSize: 11),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 2FA TOTP AUTHENTICATOR SETUP MODAL
+// =============================================================================
+class _TotpSetupSheet extends StatefulWidget {
+  final bool isAlreadyEnabled;
+  final Future<void> Function() onActivated;
+
+  const _TotpSetupSheet({required this.isAlreadyEnabled, required this.onActivated});
+
+  @override
+  State<_TotpSetupSheet> createState() => _TotpSetupSheetState();
+}
+
+class _TotpSetupSheetState extends State<_TotpSetupSheet> {
+  String? _secret;
+  String? _authUri;
+  final TextEditingController _pwdCtrl = TextEditingController();
+  final TextEditingController _codeCtrl = TextEditingController();
+  bool _isBusy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _pwdCtrl.dispose();
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _generateSecret() async {
+    setState(() {
+      _isBusy = true;
+      _error = null;
+    });
+    try {
+      final res = await ApiService.setupTotp();
+      if (!mounted) return;
+      setState(() {
+        _secret = res['secret']?.toString();
+        _authUri = res['authUri']?.toString();
+        _isBusy = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isBusy = false;
+      });
+    }
+  }
+
+  Future<void> _activate() async {
+    if (_secret == null || _pwdCtrl.text.isEmpty || _codeCtrl.text.trim().length != 6) {
+      setState(() => _error = 'Enter your current password and 6-digit code.');
+      return;
+    }
+
+    setState(() {
+      _isBusy = true;
+      _error = null;
+    });
+    try {
+      await ApiService.enableTotp(
+        secret: _secret!,
+        code: _codeCtrl.text.trim(),
+        password: _pwdCtrl.text,
+      );
+      await widget.onActivated();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🔐 2FA Authenticator activated & linked to your vault!'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isBusy = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '🔐 2FA Authenticator Security',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              widget.isAlreadyEnabled
+                  ? '2FA is active. You can generate a new secret key below to rotate it.'
+                  : 'Link Google or Microsoft Authenticator as a fail-safe backup for your vault.',
+              style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            if (_secret == null)
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF3B82F6),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _isBusy ? null : _generateSecret,
+                icon: const Icon(Icons.qr_code_rounded, color: Colors.white),
+                label: Text(
+                  _isBusy ? 'Generating...' : 'Generate Authenticator Secret Key',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              )
+            else ...[
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF3B82F6).withAlpha(110)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '1. Add setup key manually in Google Authenticator:',
+                      style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      _secret!,
+                      style: const TextStyle(
+                        color: Color(0xFF93C5FD),
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.copy_rounded, size: 16),
+                          label: const Text('Copy Key'),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: _secret!));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Secret key copied!')),
+                            );
+                          },
+                        ),
+                        if (_authUri != null)
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.link_rounded, size: 16),
+                            label: const Text('Copy URI'),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: _authUri!));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('otpauth:// URI copied!')),
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _pwdCtrl,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Current Account Password',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _codeCtrl,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: '6-Digit Authenticator Code',
+                  border: OutlineInputBorder(),
+                  counterText: '',
+                ),
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF10B981),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _isBusy ? null : _activate,
+                child: Text(
+                  _isBusy ? 'Verifying...' : 'Activate 2FA',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// CHANGE PASSWORD MODAL
+// =============================================================================
+class _ChangePasswordSheet extends StatefulWidget {
+  const _ChangePasswordSheet();
+
+  @override
+  State<_ChangePasswordSheet> createState() => _ChangePasswordSheetState();
+}
+
+class _ChangePasswordSheetState extends State<_ChangePasswordSheet> {
+  final TextEditingController _currentCtrl = TextEditingController();
+  final TextEditingController _newCtrl = TextEditingController();
+  final TextEditingController _confirmCtrl = TextEditingController();
+  bool _isSaving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _currentCtrl.dispose();
+    _newCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final cur = _currentCtrl.text;
+    final next = _newCtrl.text;
+    if (cur.isEmpty || next.length < 6) {
+      setState(() => _error = 'Enter current password & new password (6+ chars).');
+      return;
+    }
+    if (next != _confirmCtrl.text) {
+      setState(() => _error = 'New passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await ApiService.changePassword(currentPassword: cur, newPassword: next);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🔑 Password changed! Existing encrypted files remain safe.'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isSaving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '🔑 Change Account Password',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _currentCtrl,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Current Password',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _newCtrl,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'New Password (min 6 characters)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmCtrl,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Confirm New Password',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+            ],
+            const SizedBox(height: 16),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B82F6),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _isSaving ? null : _submit,
+              child: Text(
+                _isSaving ? 'Updating...' : 'Update Password',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// TELEGRAM BOT RECOVERY & ALERTS MODAL
+// =============================================================================
+class _TelegramSetupSheet extends StatefulWidget {
+  final bool isLinked;
+  final String? maskedChatId;
+  final Future<void> Function() onUpdated;
+
+  const _TelegramSetupSheet({
+    required this.isLinked,
+    required this.maskedChatId,
+    required this.onUpdated,
+  });
+
+  @override
+  State<_TelegramSetupSheet> createState() => _TelegramSetupSheetState();
+}
+
+class _TelegramSetupSheetState extends State<_TelegramSetupSheet> {
+  final TextEditingController _tokenCtrl = TextEditingController();
+  final TextEditingController _chatIdCtrl = TextEditingController();
+  final TextEditingController _pwdCtrl = TextEditingController();
+  bool _alertsEnabled = true;
+  bool _isBusy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _tokenCtrl.dispose();
+    _chatIdCtrl.dispose();
+    _pwdCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveTelegram() async {
+    if (_tokenCtrl.text.trim().isEmpty ||
+        _chatIdCtrl.text.trim().isEmpty ||
+        _pwdCtrl.text.isEmpty) {
+      setState(() => _error = 'Enter Bot Token, Chat ID, and current password.');
+      return;
+    }
+
+    setState(() {
+      _isBusy = true;
+      _error = null;
+    });
+    try {
+      await ApiService.setupTelegram(
+        botToken: _tokenCtrl.text.trim(),
+        chatId: _chatIdCtrl.text.trim(),
+        currentPassword: _pwdCtrl.text,
+        alertsEnabled: _alertsEnabled,
+      );
+      await widget.onUpdated();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✈️ Telegram linked! Verification message sent to your chat.'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isBusy = false;
+      });
+    }
+  }
+
+  Future<void> _unlink() async {
+    setState(() {
+      _isBusy = true;
+      _error = null;
+    });
+    try {
+      await ApiService.unlinkTelegram();
+      await widget.onUpdated();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Telegram recovery unlinked.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isBusy = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '✈️ Telegram Bot Recovery & Alerts',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              widget.isLinked
+                  ? 'Currently linked to Chat ${widget.maskedChatId ?? "****"}. Enter new credentials to update or tap Unlink below.'
+                  : 'Create your private bot via @BotFather & get your numeric Chat ID from @userinfobot, then send /start to your bot.',
+              style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _tokenCtrl,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Telegram Bot Token (@BotFather)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _chatIdCtrl,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Numeric Chat ID (@userinfobot)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _pwdCtrl,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Current Account Password',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Login & Security Alerts',
+                style: TextStyle(color: Colors.white, fontSize: 14),
+              ),
+              value: _alertsEnabled,
+              onChanged: (val) => setState(() => _alertsEnabled = val),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+            ],
+            const SizedBox(height: 12),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B82F6),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _isBusy ? null : _saveTelegram,
+              child: Text(
+                _isBusy ? 'Verifying Bot...' : 'Link & Send Test Message',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            if (widget.isLinked) ...[
+              const SizedBox(height: 10),
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFEF4444),
+                  side: const BorderSide(color: Color(0xFFEF4444)),
+                ),
+                onPressed: _isBusy ? null : _unlink,
+                child: const Text('Unlink Telegram'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// ADD STORAGE DRIVE / VOLUME MODAL
+// =============================================================================
+class _AddVolumeSheet extends StatefulWidget {
+  final Future<void> Function() onAdded;
+
+  const _AddVolumeSheet({required this.onAdded});
+
+  @override
+  State<_AddVolumeSheet> createState() => _AddVolumeSheetState();
+}
+
+class _AddVolumeSheetState extends State<_AddVolumeSheet> {
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _pathCtrl = TextEditingController();
+  bool _isSaving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _pathCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameCtrl.text.trim();
+    final path = _pathCtrl.text.trim();
+    if (name.isEmpty || path.isEmpty) {
+      setState(() => _error = 'Enter both volume name and server mount path.');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await ApiService.addStorageVolume(volumeName: name, mountPath: path);
+      await widget.onAdded();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('💾 Storage volume added successfully!'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isSaving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '💾 Add Storage Volume / Drive',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _nameCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Drive Name (e.g. External-HDD-2TB)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _pathCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Server Folder Path (e.g. /mnt/hdd2)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+            ],
+            const SizedBox(height: 16),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B82F6),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _isSaving ? null : _save,
+              child: Text(
+                _isSaving ? 'Adding...' : 'Mount Storage Drive',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
         ),
       ),
     );
