@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 import 'services/api_service.dart';
 import 'services/sync_engine.dart';
 
@@ -96,6 +97,26 @@ String formatDateDDMMYYYY(String? iso) {
   }
 }
 
+bool isHeicFile(String fileName, String? mimeType) {
+  final lower = fileName.toLowerCase();
+  final mime = (mimeType ?? '').toLowerCase();
+  return lower.endsWith('.heic') ||
+      lower.endsWith('.heif') ||
+      mime == 'image/heic' ||
+      mime == 'image/heif';
+}
+
+String buildMediaPreviewUrl(
+  String baseUrl,
+  String token,
+  String fileId,
+  String fileName,
+  String? mimeType,
+) {
+  final suffix = isHeicFile(fileName, mimeType) ? '&format=jpg' : '';
+  return '$baseUrl/api/v1/files/$fileId/stream?token=$token$suffix';
+}
+
 String detectCategory(String fileName, String? mimeType) {
   final lower = fileName.toLowerCase();
   final mime = (mimeType ?? '').toLowerCase();
@@ -106,7 +127,8 @@ String detectCategory(String fileName, String? mimeType) {
       lower.endsWith('.png') ||
       lower.endsWith('.gif') ||
       lower.endsWith('.webp') ||
-      lower.endsWith('.heic')) {
+      lower.endsWith('.heic') ||
+      lower.endsWith('.heif')) {
     return 'Photos';
   }
   if (mime.startsWith('video/') ||
@@ -819,6 +841,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _shareCloudFile(Map<String, dynamic> file) async {
+    final fileId = file['id'].toString();
+    final fileName = (file['file_name'] ?? 'file').toString();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Preparing "$fileName" to share...')),
+      );
+    }
+
+    try {
+      final savedPath = await ApiService.downloadFile(
+        fileId: fileId,
+        fileName: fileName,
+      );
+      await Share.shareXFiles([XFile(savedPath)], text: fileName);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFEF4444),
+          content: Text(
+            'Share error: $e',
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
+  }
+
   void _openFilePreviewOrSheet(Map<String, dynamic> file) {
     final name = (file['file_name'] ?? '').toString();
     final mime = (file['mime_type'] ?? '').toString();
@@ -826,19 +878,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final fileId = file['id'].toString();
 
     if (category == 'Photos' && _baseUrl.isNotEmpty && _token.isNotEmpty) {
-      final imageUrl = '$_baseUrl/api/v1/files/$fileId/stream?token=$_token';
+      final photoFiles = _filteredFiles.where((f) {
+        final fn = (f['file_name'] ?? '').toString();
+        final fm = f['mime_type']?.toString();
+        return detectCategory(fn, fm) == 'Photos';
+      }).toList();
+      final idx = photoFiles.indexWhere((f) => f['id'].toString() == fileId);
+      final gallery = photoFiles.isNotEmpty ? photoFiles : [file];
+      final initialIdx = idx >= 0 ? idx : 0;
+
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (viewerCtx) => PhotoViewerScreen(
-            fileName: name,
-            imageUrl: imageUrl,
-            onDownload: () => _downloadCloudFile(file),
-            onDelete: () async {
-              final deleted = await _deleteCloudFile(file);
-              if (deleted && viewerCtx.mounted) {
-                Navigator.of(viewerCtx).pop();
-              }
-            },
+          builder: (_) => PhotoViewerScreen(
+            photos: gallery,
+            initialIndex: initialIdx,
+            baseUrl: _baseUrl,
+            token: _token,
+            onShare: _shareCloudFile,
+            onDownload: _downloadCloudFile,
+            onDelete: _deleteCloudFile,
           ),
         ),
       );
@@ -1397,7 +1455,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             height: 48,
             child: isPhoto
                 ? Image.network(
-                    '$_baseUrl/api/v1/files/$id/stream?token=$_token',
+                    buildMediaPreviewUrl(_baseUrl, _token, id, name, mime),
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => _IconBadge(cat: cat),
                   )
@@ -1435,11 +1493,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
               icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF9CA3AF)),
               color: const Color(0xFF1E293B),
               onSelected: (action) {
+                if (action == 'share') _shareCloudFile(file);
                 if (action == 'download') _downloadCloudFile(file);
                 if (action == 'rename') _renameCloudFile(file);
                 if (action == 'delete') _deleteCloudFile(file);
               },
               itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'share',
+                  child: Row(
+                    children: [
+                      Icon(Icons.share_rounded, size: 18, color: Color(0xFF10B981)),
+                      SizedBox(width: 8),
+                      Text('Share'),
+                    ],
+                  ),
+                ),
                 PopupMenuItem(
                   value: 'download',
                   child: Row(
@@ -2023,68 +2092,192 @@ class _DetailRow extends StatelessWidget {
 }
 
 // =============================================================================
-// IN-APP PHOTO PREVIEWER WITH ZOOM, DOWNLOAD & DELETE
+// IN-APP GOOGLE PHOTOS STYLE SWIPE VIEWER WITH TOP 3-DOT MENU
 // =============================================================================
-class PhotoViewerScreen extends StatelessWidget {
-  final String fileName;
-  final String imageUrl;
-  final VoidCallback onDownload;
-  final Future<void> Function()? onDelete;
+class PhotoViewerScreen extends StatefulWidget {
+  final List<Map<String, dynamic>> photos;
+  final int initialIndex;
+  final String baseUrl;
+  final String token;
+  final Future<void> Function(Map<String, dynamic> file) onShare;
+  final Future<void> Function(Map<String, dynamic> file) onDownload;
+  final Future<bool> Function(Map<String, dynamic> file) onDelete;
 
   const PhotoViewerScreen({
     super.key,
-    required this.fileName,
-    required this.imageUrl,
+    required this.photos,
+    required this.initialIndex,
+    required this.baseUrl,
+    required this.token,
+    required this.onShare,
     required this.onDownload,
-    this.onDelete,
+    required this.onDelete,
   });
 
   @override
+  State<PhotoViewerScreen> createState() => _PhotoViewerScreenState();
+}
+
+class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
+  late final PageController _pageController;
+  late List<Map<String, dynamic>> _items;
+  late int _currentIndex;
+  bool _showChrome = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = List<Map<String, dynamic>>.from(widget.photos);
+    _currentIndex = widget.initialIndex.clamp(0, _items.isEmpty ? 0 : _items.length - 1);
+    _pageController = PageController(initialPage: _currentIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleDeleteCurrent() async {
+    if (_items.isEmpty) return;
+    final target = _items[_currentIndex];
+    final deleted = await widget.onDelete(target);
+    if (!deleted || !mounted) return;
+
+    setState(() {
+      _items.removeAt(_currentIndex);
+      if (_currentIndex >= _items.length && _items.isNotEmpty) {
+        _currentIndex = _items.length - 1;
+      }
+    });
+
+    if (_items.isEmpty) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final hasItems = _items.isNotEmpty;
+    final currentFile = hasItems ? _items[_currentIndex] : <String, dynamic>{};
+    final currentName = (currentFile['file_name'] ?? 'Photo').toString();
+
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        title: Text(
-          fileName,
-          style: const TextStyle(fontSize: 16),
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.download_rounded, color: Colors.white),
-            tooltip: 'Download Photo',
-            onPressed: onDownload,
-          ),
-          if (onDelete != null)
-            IconButton(
-              icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444)),
-              tooltip: 'Delete Photo',
-              onPressed: () => onDelete!.call(),
-            ),
-        ],
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 0.5,
-          maxScale: 4.0,
-          child: Image.network(
-            imageUrl,
-            fit: BoxFit.contain,
-            loadingBuilder: (ctx, child, progress) {
-              if (progress == null) return child;
-              return const Center(child: CircularProgressIndicator());
-            },
-            errorBuilder: (_, __, ___) => const Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.broken_image_rounded, size: 64, color: Colors.grey),
-                SizedBox(height: 12),
-                Text('Failed to load preview', style: TextStyle(color: Colors.grey)),
+      extendBodyBehindAppBar: true,
+      appBar: _showChrome
+          ? AppBar(
+              backgroundColor: Colors.black.withAlpha(170),
+              elevation: 0,
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    currentName,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (_items.length > 1)
+                    Text(
+                      '${_currentIndex + 1} / ${_items.length}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFFD1D5DB)),
+                    ),
+                ],
+              ),
+              actions: [
+                if (hasItems)
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+                    color: const Color(0xFF1E293B),
+                    tooltip: 'Photo options',
+                    onSelected: (action) {
+                      if (action == 'share') widget.onShare(currentFile);
+                      if (action == 'download') widget.onDownload(currentFile);
+                      if (action == 'delete') _handleDeleteCurrent();
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'share',
+                        child: Row(
+                          children: [
+                            Icon(Icons.share_rounded, size: 18, color: Color(0xFF10B981)),
+                            SizedBox(width: 10),
+                            Text('Share'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'download',
+                        child: Row(
+                          children: [
+                            Icon(Icons.download_rounded, size: 18, color: Color(0xFF60A5FA)),
+                            SizedBox(width: 10),
+                            Text('Download'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline_rounded, size: 18, color: Color(0xFFEF4444)),
+                            SizedBox(width: 10),
+                            Text('Delete', style: TextStyle(color: Color(0xFFEF4444))),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
               ],
+            )
+          : null,
+      body: PageView.builder(
+        controller: _pageController,
+        physics: const BouncingScrollPhysics(),
+        itemCount: _items.length,
+        onPageChanged: (index) {
+          setState(() => _currentIndex = index);
+        },
+        itemBuilder: (ctx, index) {
+          final item = _items[index];
+          final id = item['id'].toString();
+          final name = (item['file_name'] ?? '').toString();
+          final mime = item['mime_type']?.toString();
+          final previewUrl = buildMediaPreviewUrl(
+            widget.baseUrl,
+            widget.token,
+            id,
+            name,
+            mime,
+          );
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _showChrome = !_showChrome),
+            child: Center(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4.5,
+                child: Image.network(
+                  previewUrl,
+                  fit: BoxFit.contain,
+                  loadingBuilder: (_, child, progress) {
+                    if (progress == null) return child;
+                    return const Center(child: CircularProgressIndicator());
+                  },
+                  errorBuilder: (_, __, ___) => const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.broken_image_rounded, size: 64, color: Colors.grey),
+                      SizedBox(height: 12),
+                      Text('Failed to load preview', style: TextStyle(color: Colors.grey)),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
