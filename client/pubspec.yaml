@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -17,6 +17,7 @@ dependencies:
   path_provider: ^2.1.2
   permission_handler: ^11.3.0
   share_plus: ^7.2.2
+  device_info_plus: ^10.1.2
   cupertino_icons: ^1.0.6
 
 dev_dependencies:

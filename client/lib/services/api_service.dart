@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:crypto/crypto.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -148,17 +150,113 @@ class ApiService {
     await prefs.remove('device_id');
   }
 
+  static const Map<String, String> _appleMachineMap = {
+    'iPhone13,1': 'iPhone 12 mini',
+    'iPhone13,2': 'iPhone 12',
+    'iPhone13,3': 'iPhone 12 Pro',
+    'iPhone13,4': 'iPhone 12 Pro Max',
+    'iPhone14,2': 'iPhone 13 Pro',
+    'iPhone14,3': 'iPhone 13 Pro Max',
+    'iPhone14,4': 'iPhone 13 mini',
+    'iPhone14,5': 'iPhone 13',
+    'iPhone14,6': 'iPhone SE (3rd gen)',
+    'iPhone14,7': 'iPhone 14',
+    'iPhone14,8': 'iPhone 14 Plus',
+    'iPhone15,2': 'iPhone 14 Pro',
+    'iPhone15,3': 'iPhone 14 Pro Max',
+    'iPhone15,4': 'iPhone 15',
+    'iPhone15,5': 'iPhone 15 Plus',
+    'iPhone16,1': 'iPhone 15 Pro',
+    'iPhone16,2': 'iPhone 15 Pro Max',
+    'iPhone17,1': 'iPhone 16 Pro',
+    'iPhone17,2': 'iPhone 16 Pro Max',
+    'iPhone17,3': 'iPhone 16',
+    'iPhone17,4': 'iPhone 16 Plus',
+    'iPhone17,5': 'iPhone 16e',
+  };
+
+  /// Returns a stable unique device ID persisted across logouts & app restarts.
+  static Future<String> getOrCreateDeviceUid(String deviceType) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString('persistent_device_uid');
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
+    }
+    final rng = Random.secure();
+    final hex = List<String>.generate(
+      12,
+      (_) => rng.nextInt(16).toRadixString(16),
+    ).join();
+    final uid = 'app-$deviceType-$hex';
+    await prefs.setString('persistent_device_uid', uid);
+    return uid;
+  }
+
+  /// Auto-detects hardware model name and platform cleanly on Android & iOS.
+  static Future<Map<String, String>> detectDeviceInfo() async {
+    final deviceType = Platform.isAndroid
+        ? 'android'
+        : (Platform.isIOS ? 'ios' : Platform.operatingSystem);
+    try {
+      final plugin = DeviceInfoPlugin();
+      if (Platform.isAndroid) {
+        final info = await plugin.androidInfo;
+        final brandRaw = info.brand.trim();
+        final model = info.model.trim();
+        final brand = brandRaw.isNotEmpty
+            ? '${brandRaw[0].toUpperCase()}${brandRaw.substring(1)}'
+            : '';
+        String name;
+        if (model.isNotEmpty &&
+            brand.isNotEmpty &&
+            !model.toLowerCase().startsWith(brand.toLowerCase())) {
+          name = '$brand $model';
+        } else if (model.isNotEmpty) {
+          name = model;
+        } else if (brand.isNotEmpty) {
+          name = '$brand Phone';
+        } else {
+          name = 'Android Phone';
+        }
+        return {'deviceName': name, 'deviceType': 'android'};
+      }
+      if (Platform.isIOS) {
+        final info = await plugin.iosInfo;
+        final machine = info.utsname.machine.trim();
+        final friendly = _appleMachineMap[machine] ??
+            (info.model.trim().isNotEmpty ? info.model.trim() : 'iPhone');
+        return {'deviceName': friendly, 'deviceType': 'ios'};
+      }
+    } catch (_) {}
+
+    final host = Platform.localHostname.replaceAll('.local', '').trim();
+    return {
+      'deviceName': host.isNotEmpty
+          ? host
+          : (Platform.isAndroid ? 'Android Phone' : 'iPhone'),
+      'deviceType': deviceType,
+    };
+  }
+
   // Login & Device Handshake
   static Future<Map<String, dynamic>> login({
     required String username,
     required String password,
-    required String deviceName,
-    required String deviceType,
+    String? deviceName,
+    String? deviceType,
   }) async {
     final baseUrl = await getBaseUrl();
     if (baseUrl.isEmpty) {
       throw Exception('Please enter a valid Server Address');
     }
+    final detected = await detectDeviceInfo();
+    final effectiveType = (deviceType != null && deviceType.trim().isNotEmpty)
+        ? deviceType.trim()
+        : detected['deviceType']!;
+    final effectiveName = (deviceName != null && deviceName.trim().isNotEmpty)
+        ? deviceName.trim()
+        : detected['deviceName']!;
+    final deviceUid = await getOrCreateDeviceUid(effectiveType);
     final url = Uri.parse('$baseUrl/api/v1/auth/login');
 
     final response = await http
@@ -168,9 +266,9 @@ class ApiService {
           body: jsonEncode({
             'username': username,
             'password': password,
-            'deviceUid': 'mobile-$deviceName-${DateTime.now().millisecondsSinceEpoch}',
-            'deviceName': deviceName,
-            'deviceType': deviceType,
+            'deviceUid': deviceUid,
+            'deviceName': effectiveName,
+            'deviceType': effectiveType,
           }),
         )
         .timeout(const Duration(seconds: 15));
@@ -364,6 +462,24 @@ class ApiService {
     final data = await _authRequest('GET', '/api/v1/devices');
     final list = data['devices'] as List<dynamic>? ?? [];
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Syncs the real detected device name and cleans stale 0-file duplicates.
+  static Future<void> syncDeviceInfo() async {
+    final info = await detectDeviceInfo();
+    await _authRequest(
+      'POST',
+      '/api/v1/devices/sync-info',
+      body: {
+        'deviceName': info['deviceName'],
+        'deviceType': info['deviceType'],
+      },
+    );
+  }
+
+  /// Removes an old device entry while preserving its uploaded files in the vault.
+  static Future<Map<String, dynamic>> deleteDevice(String deviceId) async {
+    return _authRequest('DELETE', '/api/v1/devices/${Uri.encodeComponent(deviceId)}');
   }
 
   // Build authenticated Stream URL for Image/Media viewing
