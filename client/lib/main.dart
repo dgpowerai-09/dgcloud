@@ -592,6 +592,16 @@ class _LoginScreenState extends State<LoginScreen> {
 // =============================================================================
 // MAIN DASHBOARD WITH BOTTOM NAVIGATION (DRIVE STYLE)
 // =============================================================================
+class _QueuedUploadItem {
+  final File file;
+  final String fileName;
+
+  const _QueuedUploadItem({
+    required this.file,
+    required this.fileName,
+  });
+}
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -600,6 +610,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  static const MethodChannel _iosMediaChannel = MethodChannel('com.dgcloud/ios_media');
   int _selectedTab = 0;
 
   // Cloud Files & Storage state
@@ -716,6 +727,140 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _pickAndUploadAnyFiles() async {
+    if (Platform.isIOS) {
+      final choice = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: const Color(0xFF172036),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        ),
+        builder: (sheetCtx) {
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    child: Text(
+                      'Upload to DG Cloud',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  ListTile(
+                    leading: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3B82F6).withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.photo_library_rounded,
+                        color: Color(0xFF60A5FA),
+                      ),
+                    ),
+                    title: const Text(
+                      'Photos & Videos (Original HEIC / RAW)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Preserves raw 100% untouched .HEIC / .DNG / .MOV quality from Apple Photos',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                    ),
+                    onTap: () => Navigator.of(sheetCtx).pop('photos'),
+                  ),
+                  const Divider(color: Color(0xFF1E293B), height: 8),
+                  ListTile(
+                    leading: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.folder_open_rounded,
+                        color: Color(0xFF34D399),
+                      ),
+                    ),
+                    title: const Text(
+                      'Browse Files (iCloud / On My iPhone)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Upload documents, archives, or raw files saved in iPhone Files',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                    ),
+                    onTap: () => Navigator.of(sheetCtx).pop('files'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+
+      if (!mounted || choice == null) return;
+      if (choice == 'photos') {
+        await _pickOriginalIosPhotosAndUpload();
+        return;
+      }
+    }
+
+    await _pickFromFilePickerAndUpload();
+  }
+
+  Future<void> _pickOriginalIosPhotosAndUpload() async {
+    try {
+      final rawPaths = await _iosMediaChannel.invokeMethod<List<dynamic>>(
+        'pickOriginalMedia',
+      );
+      if (rawPaths == null || rawPaths.isEmpty) return;
+
+      final items = <_QueuedUploadItem>[];
+      for (final entry in rawPaths) {
+        final path = entry?.toString() ?? '';
+        if (path.isEmpty) continue;
+        final file = File(path);
+        if (!await file.exists()) continue;
+        final fileName = path.split(Platform.pathSeparator).last;
+        items.add(_QueuedUploadItem(file: file, fileName: fileName));
+      }
+
+      if (items.isEmpty) return;
+      await _uploadQueuedItems(items, deleteTempAfterUpload: true);
+    } on PlatformException {
+      if (!mounted) return;
+      await _pickFromFilePickerAndUpload();
+    }
+  }
+
+  Future<void> _pickFromFilePickerAndUpload() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.any,
@@ -723,34 +868,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (result == null || result.files.isEmpty) return;
 
+    final items = <_QueuedUploadItem>[];
+    for (final f in result.files) {
+      if (f.path == null) continue;
+      items.add(_QueuedUploadItem(file: File(f.path!), fileName: f.name));
+    }
+
+    if (items.isEmpty) return;
+    await _uploadQueuedItems(items, deleteTempAfterUpload: false);
+  }
+
+  Future<void> _uploadQueuedItems(
+    List<_QueuedUploadItem> items, {
+    required bool deleteTempAfterUpload,
+  }) async {
+    if (items.isEmpty) return;
+
     setState(() {
       _isUploading = true;
       _uploadProgress = 0.0;
       _uploadStatus = 'Preparing upload...';
     });
 
-    final files = result.files;
     int successCount = 0;
 
-    for (int i = 0; i < files.length; i++) {
-      final f = files[i];
-      if (f.path == null) continue;
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
 
       if (mounted) {
         setState(() {
-          _uploadStatus = 'Uploading [${i + 1}/${files.length}]: ${f.name}';
+          _uploadStatus = 'Uploading [${i + 1}/${items.length}]: ${item.fileName}';
         });
       }
 
       try {
         await ApiService.uploadFile(
-          file: File(f.path!),
-          fileName: f.name,
+          file: item.file,
+          fileName: item.fileName,
           onProgress: (p, status) {
             if (mounted) {
               setState(() {
                 _uploadProgress = p;
-                _uploadStatus = '[${i + 1}/${files.length}] $status';
+                _uploadStatus = '[${i + 1}/${items.length}] $status';
               });
             }
           },
@@ -762,11 +921,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             SnackBar(
               backgroundColor: const Color(0xFFEF4444),
               content: Text(
-                'Upload failed for ${f.name}: $e',
+                'Upload failed for ${item.fileName}: $e',
                 style: const TextStyle(color: Colors.white),
               ),
             ),
           );
+        }
+      } finally {
+        if (deleteTempAfterUpload) {
+          await _cleanupTempPickedFile(item.file);
         }
       }
     }
@@ -788,6 +951,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
       await _refreshAllData();
+    }
+  }
+
+  Future<void> _cleanupTempPickedFile(File file) async {
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+      final parent = file.parent;
+      if (parent.path.contains('dg_raw_picks') && await parent.exists()) {
+        if (await parent.list().isEmpty) {
+          await parent.delete();
+        }
+      }
+    } catch (_) {
+      // Best-effort cache cleanup after native iOS PHPicker upload.
     }
   }
 

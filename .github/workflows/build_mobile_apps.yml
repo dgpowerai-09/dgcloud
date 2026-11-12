@@ -104,8 +104,9 @@ jobs:
           cp client/pubspec.yaml build_app/pubspec.yaml
           cp client/flutter_launcher_icons_ios.yaml build_app/flutter_launcher_icons_ios.yaml
           
-          # 4. Inject iOS permissions, ATS HTTP support & background fetch in Info.plist
+          # 4. Inject iOS permissions, ATS HTTP support & background fetch in Info.plist + native raw HEIC/RAW PHPicker
           cp client/ios/Runner/Info.plist build_app/ios/Runner/Info.plist
+          cp client/ios/Runner/AppDelegate.swift build_app/ios/Runner/AppDelegate.swift
           
           cd build_app
           flutter pub get
