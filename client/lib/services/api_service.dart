@@ -325,13 +325,17 @@ class ApiService {
   static Future<Map<String, dynamic>> createShareLink({
     required String fileId,
     String? password,
-    int expiresHours = 72,
+    int? expiresInDays,
+    int? expiresHours,
   }) async {
-    return _authRequest('POST', '/api/v1/shares', body: {
+    final computedHours = expiresHours ?? (expiresInDays != null && expiresInDays > 0 ? expiresInDays * 24 : 72);
+    final body = <String, dynamic>{
       'fileId': fileId,
-      'password': password,
-      'expiresHours': expiresHours,
-    });
+    };
+    if (password != null && password.isNotEmpty) body['password'] = password;
+    body['expiresHours'] = computedHours;
+
+    return _authRequest('POST', '/api/v1/shares', body: body);
   }
 
   // List active user shares
