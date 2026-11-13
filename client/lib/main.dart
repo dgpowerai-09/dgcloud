@@ -1072,9 +1072,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF172036),
-        title: const Text('Delete File?', style: TextStyle(color: Colors.white)),
+        title: const Text('Move to Trash?', style: TextStyle(color: Colors.white)),
         content: Text(
-          'Are you sure you want to permanently delete "$name"?',
+          'Move "$name" to Recycle Bin? You can restore it anytime.',
           style: const TextStyle(color: Color(0xFFD1D5DB)),
         ),
         actions: [
@@ -1088,7 +1088,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+            child: const Text('Move to Trash', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -1101,7 +1101,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return true;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Deleted "$name"'),
+          content: Text('Moved "$name" to Recycle Bin'),
           backgroundColor: const Color(0xFF10B981),
         ),
       );
@@ -1147,6 +1147,192 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
     }
+  }
+
+  void _showShareLinkDialog(Map<String, dynamic> file) {
+    final fileName = (file['file_name'] ?? 'File').toString();
+    final fileId = file['id']?.toString() ?? '';
+    final pwdCtrl = TextEditingController();
+    int expiresInDays = 7;
+    bool isGenerating = false;
+    String? generatedUrl;
+    String? errorMsg;
+
+    showDialog(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (context, setDlgState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF172036),
+            title: Row(
+              children: [
+                const Icon(Icons.share_rounded, color: Color(0xFF3B82F6), size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Share "$fileName"',
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (generatedUrl == null) ...[
+                    const Text(
+                      'Anyone with this link can download the file directly in their browser. Decrypted securely on the fly.',
+                      style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Link Expiration:',
+                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<int>(
+                      value: expiresInDays,
+                      dropdownColor: const Color(0xFF1E293B),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 1, child: Text('1 Day', style: TextStyle(color: Colors.white))),
+                        DropdownMenuItem(value: 7, child: Text('7 Days', style: TextStyle(color: Colors.white))),
+                        DropdownMenuItem(value: 30, child: Text('30 Days', style: TextStyle(color: Colors.white))),
+                        DropdownMenuItem(value: 0, child: Text('Never Expires', style: TextStyle(color: Colors.white))),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) setDlgState(() => expiresInDays = val);
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Optional Password Protection:',
+                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: pwdCtrl,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        hintText: 'Leave empty for no password',
+                        hintStyle: TextStyle(color: Color(0xFF6B7280)),
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                    ),
+                    if (errorMsg != null) ...[
+                      const SizedBox(height: 10),
+                      Text(errorMsg!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12)),
+                    ],
+                  ] else ...[
+                    const Text(
+                      'Public Link Created!',
+                      style: TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0x33FFFFFF)),
+                      ),
+                      child: SelectableText(
+                        generatedUrl!,
+                        style: const TextStyle(color: Color(0xFF60A5FA), fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.copy_rounded, size: 16),
+                            label: const Text('Copy'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF3B82F6),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: generatedUrl!));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Share link copied to clipboard!'),
+                                  backgroundColor: Color(0xFF10B981),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.share_rounded, size: 16),
+                            label: const Text('Share'),
+                            onPressed: () {
+                              Share.share(
+                                generatedUrl!,
+                                subject: 'DG Cloud File: $fileName',
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dlgCtx).pop(),
+                child: Text(generatedUrl == null ? 'Cancel' : 'Done'),
+              ),
+              if (generatedUrl == null)
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3B82F6),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: isGenerating
+                      ? null
+                      : () async {
+                          setDlgState(() {
+                            isGenerating = true;
+                            errorMsg = null;
+                          });
+                          try {
+                            final res = await ApiService.createShareLink(
+                              fileId: fileId,
+                              password: pwdCtrl.text.trim().isEmpty ? null : pwdCtrl.text.trim(),
+                              expiresInDays: expiresInDays == 0 ? null : expiresInDays,
+                            );
+                            setDlgState(() {
+                              isGenerating = false;
+                              generatedUrl = (res['url'] ?? '').toString();
+                            });
+                          } catch (e) {
+                            setDlgState(() {
+                              isGenerating = false;
+                              errorMsg = e.toString().replaceAll('Exception: ', '');
+                            });
+                          }
+                        },
+                  child: Text(isGenerating ? 'Creating...' : 'Create Link'),
+                ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   void _openFilePreviewOrSheet(Map<String, dynamic> file) {
@@ -1245,6 +1431,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onPressed: () {
                   Navigator.of(ctx).pop();
                   _downloadCloudFile(file);
+                },
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.link_rounded, size: 18),
+                label: const Text('Create Public Share Link'),
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _showShareLinkDialog(file);
                 },
               ),
               const SizedBox(height: 10),
@@ -2331,6 +2526,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
                   onTap: () => _openModalSheet(const _CleanerModalSheet()),
+                ),
+                const Divider(height: 1, color: Color(0x14FFFFFF)),
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_rounded, color: Color(0xFFEF4444)),
+                  title: const Text(
+                    '🗑️ Recycle Bin (Trash)',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'View, restore, or permanently empty deleted files',
+                    style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
+                  onTap: () => _openModalSheet(_TrashModalSheet(onChanged: _refreshAllData)),
+                ),
+                const Divider(height: 1, color: Color(0x14FFFFFF)),
+                ListTile(
+                  leading: const Icon(Icons.share_rounded, color: Color(0xFF3B82F6)),
+                  title: const Text(
+                    '🔗 Active Shared Links',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    'Manage public password-protected share links',
+                    style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF9CA3AF)),
+                  onTap: () => _openModalSheet(const _SharesModalSheet()),
                 ),
                 const Divider(height: 1, color: Color(0x14FFFFFF)),
                 ListTile(
@@ -3978,6 +4201,465 @@ class _AddVolumeSheetState extends State<_AddVolumeSheet> {
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+// =============================================================================
+// RECYCLE BIN (TRASH) MODAL SHEET
+// =============================================================================
+class _TrashModalSheet extends StatefulWidget {
+  final Future<void> Function()? onChanged;
+  const _TrashModalSheet({this.onChanged});
+
+  @override
+  State<_TrashModalSheet> createState() => _TrashModalSheetState();
+}
+
+class _TrashModalSheetState extends State<_TrashModalSheet> {
+  bool _isLoading = true;
+  List<Map<String, dynamic>> _trash = [];
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTrash();
+  }
+
+  Future<void> _loadTrash() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final items = await ApiService.getTrash();
+      if (!mounted) return;
+      setState(() {
+        _trash = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _restoreFile(Map<String, dynamic> item) async {
+    final id = item['id'].toString();
+    final name = (item['file_name'] ?? 'File').toString();
+    try {
+      await ApiService.restoreTrashFile(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Restored "$name" to files'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      await widget.onChanged?.call();
+      await _loadTrash();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to restore: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
+  }
+
+  Future<void> _purgeFile(Map<String, dynamic> item) async {
+    final id = item['id'].toString();
+    final name = (item['file_name'] ?? 'File').toString();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF172036),
+        title: const Text('Permanently Delete?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Permanently destroy "$name"? This cannot be undone.',
+          style: const TextStyle(color: Color(0xFFD1D5DB)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete Forever', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await ApiService.purgeTrashFile(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Permanently deleted "$name"'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      await widget.onChanged?.call();
+      await _loadTrash();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
+  }
+
+  Future<void> _emptyAllTrash() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF172036),
+        title: const Text('Empty Entire Trash?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'All deleted files will be destroyed permanently from encrypted storage. This cannot be undone.',
+          style: TextStyle(color: Color(0xFFD1D5DB)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Empty Trash', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await ApiService.emptyTrash();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Recycle Bin emptied successfully'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+      await widget.onChanged?.call();
+      await _loadTrash();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.delete_sweep_rounded, color: Color(0xFFEF4444), size: 24),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    '🗑️ Recycle Bin (Trash)',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ),
+                if (_trash.isNotEmpty)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: const Color(0xFFEF4444)),
+                    icon: const Icon(Icons.delete_forever_rounded, size: 16),
+                    label: const Text('Empty All'),
+                    onPressed: _emptyAllTrash,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Files stay in trash until permanently purged. Restoring moves them back to your cloud files.',
+              style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            if (_isLoading)
+              const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()))
+            else if (_error != null)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_error!, style: const TextStyle(color: Color(0xFFEF4444))),
+                ),
+              )
+            else if (_trash.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.check_circle_outline_rounded, size: 48, color: Color(0xFF10B981)),
+                      SizedBox(height: 10),
+                      Text('Recycle Bin is empty', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                child: ListView.separated(
+                  itemCount: _trash.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0x14FFFFFF)),
+                  itemBuilder: (ctx, i) {
+                    final item = _trash[i];
+                    final name = (item['file_name'] ?? 'File').toString();
+                    final size = (item['file_size'] as num?)?.toInt() ?? 0;
+                    final deletedAt = formatDateDDMMYYYY(item['deleted_at']?.toString());
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const CircleAvatar(
+                        backgroundColor: Color(0x22EF4444),
+                        child: Icon(Icons.insert_drive_file_outlined, color: Color(0xFFEF4444), size: 20),
+                      ),
+                      title: Text(
+                        name,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${formatBytes(size)} • Deleted $deletedAt',
+                        style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.restore_rounded, color: Color(0xFF10B981), size: 22),
+                            tooltip: 'Restore',
+                            onPressed: () => _restoreFile(item),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_forever_rounded, color: Color(0xFFEF4444), size: 22),
+                            tooltip: 'Delete Forever',
+                            onPressed: () => _purgeFile(item),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// ACTIVE SHARES MODAL SHEET
+// =============================================================================
+class _SharesModalSheet extends StatefulWidget {
+  const _SharesModalSheet();
+
+  @override
+  State<_SharesModalSheet> createState() => _SharesModalSheetState();
+}
+
+class _SharesModalSheetState extends State<_SharesModalSheet> {
+  bool _isLoading = true;
+  List<Map<String, dynamic>> _shares = [];
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadShares();
+  }
+
+  Future<void> _loadShares() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final items = await ApiService.getShares();
+      if (!mounted) return;
+      setState(() {
+        _shares = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _revokeShare(Map<String, dynamic> share) async {
+    final id = share['id'].toString();
+    try {
+      await ApiService.revokeShare(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Public share link revoked'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+      await _loadShares();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.share_rounded, color: Color(0xFF3B82F6), size: 24),
+                SizedBox(width: 10),
+                Text(
+                  '🔗 Active Shared Links',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Public download links you have generated. Anyone with the URL can access the file until revoked or expired.',
+              style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            if (_isLoading)
+              const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()))
+            else if (_error != null)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_error!, style: const TextStyle(color: Color(0xFFEF4444))),
+                ),
+              )
+            else if (_shares.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.link_off_rounded, size: 48, color: Color(0xFF6B7280)),
+                      SizedBox(height: 10),
+                      Text('No active share links', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                child: ListView.separated(
+                  itemCount: _shares.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0x14FFFFFF)),
+                  itemBuilder: (ctx, i) {
+                    final share = _shares[i];
+                    final fileName = (share['file_name'] ?? 'File').toString();
+                    final hasPassword = (share['has_password'] == true || share['has_password'] == 1);
+                    final accessCount = share['access_count']?.toString() ?? '0';
+                    final expiresAt = share['expires_at'] != null ? formatDateDDMMYYYY(share['expires_at'].toString()) : 'Never';
+                    final shareUrl = (share['share_url'] ?? '').toString();
+
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const CircleAvatar(
+                        backgroundColor: Color(0x223B82F6),
+                        child: Icon(Icons.link_rounded, color: Color(0xFF3B82F6), size: 20),
+                      ),
+                      title: Text(
+                        fileName,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        'Expires: $expiresAt • $accessCount downloads${hasPassword ? " • 🔒 Password" : ""}',
+                        style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (shareUrl.isNotEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, color: Color(0xFF60A5FA), size: 20),
+                              tooltip: 'Copy Link',
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: shareUrl));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Share link copied to clipboard!'),
+                                    backgroundColor: Color(0xFF10B981),
+                                  ),
+                                );
+                              },
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 20),
+                            tooltip: 'Revoke Link',
+                            onPressed: () => _revokeShare(share),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
           ],
         ),
       ),

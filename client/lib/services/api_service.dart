@@ -293,9 +293,57 @@ class ApiService {
     return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  // Delete a file cleanly from cloud vault
-  static Future<Map<String, dynamic>> deleteFile(String fileId) async {
-    return _authRequest('DELETE', '/api/v1/files/$fileId');
+  // Delete a file (moves to Recycle Bin)
+  static Future<Map<String, dynamic>> deleteFile(String fileId, {bool purge = false}) async {
+    final query = purge ? '?purge=1' : '';
+    return _authRequest('DELETE', '/api/v1/files/$fileId$query');
+  }
+
+  // Fetch Recycle Bin (Trash) files
+  static Future<List<Map<String, dynamic>>> getTrash() async {
+    final data = await _authRequest('GET', '/api/v1/trash');
+    final list = data['trash'] as List<dynamic>? ?? [];
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  // Restore file from Recycle Bin
+  static Future<Map<String, dynamic>> restoreTrashFile(String fileId) async {
+    return _authRequest('POST', '/api/v1/trash/$fileId/restore');
+  }
+
+  // Permanently purge file from Recycle Bin
+  static Future<Map<String, dynamic>> purgeTrashFile(String fileId) async {
+    return _authRequest('DELETE', '/api/v1/trash/$fileId/purge');
+  }
+
+  // Permanently empty entire Recycle Bin
+  static Future<Map<String, dynamic>> emptyTrash() async {
+    return _authRequest('DELETE', '/api/v1/trash');
+  }
+
+  // Create Encrypted Public Share Link
+  static Future<Map<String, dynamic>> createShareLink({
+    required String fileId,
+    String? password,
+    int expiresHours = 72,
+  }) async {
+    return _authRequest('POST', '/api/v1/shares', body: {
+      'fileId': fileId,
+      'password': password,
+      'expiresHours': expiresHours,
+    });
+  }
+
+  // List active user shares
+  static Future<List<Map<String, dynamic>>> getShares() async {
+    final data = await _authRequest('GET', '/api/v1/shares');
+    final list = data['shares'] as List<dynamic>? ?? [];
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  // Revoke share link
+  static Future<Map<String, dynamic>> revokeShare(String shareId) async {
+    return _authRequest('DELETE', '/api/v1/shares/$shareId');
   }
 
   // Rename a file in cloud vault
