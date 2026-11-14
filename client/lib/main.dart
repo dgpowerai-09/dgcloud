@@ -2838,6 +2838,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ...volumes.map(
               (v) {
                 final isCloud = (v['is_cloud_tier'] == 1 || v['is_cloud_tier'] == true);
+                final isLaptopNode = (v['volume_type'] == 'laptop_node');
                 final isOnline = v['is_accessible'] != false;
                 final fileCount = (v['file_count'] as num?)?.toInt() ?? 0;
                 final usedBytes = (v['used_capacity_bytes'] as num?)?.toInt() ?? 0;
@@ -2854,10 +2855,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Row(
                           children: [
                             CircleAvatar(
-                              backgroundColor: (isCloud ? const Color(0xFF3B82F6) : const Color(0xFF10B981)).withAlpha(30),
+                              backgroundColor: isCloud
+                                  ? const Color(0xFF3B82F6).withAlpha(30)
+                                  : isLaptopNode
+                                      ? const Color(0xFF8B5CF6).withAlpha(30)
+                                      : const Color(0xFF10B981).withAlpha(30),
                               child: Icon(
-                                isCloud ? Icons.cloud_outlined : Icons.storage_rounded,
-                                color: isCloud ? const Color(0xFF60A5FA) : const Color(0xFF10B981),
+                                isCloud
+                                    ? Icons.cloud_outlined
+                                    : isLaptopNode
+                                        ? Icons.laptop_chromebook_rounded
+                                        : Icons.storage_rounded,
+                                color: isCloud
+                                    ? const Color(0xFF60A5FA)
+                                    : isLaptopNode
+                                        ? const Color(0xFFA78BFA)
+                                        : const Color(0xFF10B981),
                                 size: 20,
                               ),
                             ),
@@ -2884,7 +2897,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           borderRadius: BorderRadius.circular(4),
                                         ),
                                         child: Text(
-                                          isOnline ? 'Online' : 'Offline',
+                                          isLaptopNode
+                                              ? (isOnline ? 'Online (Laptop Connected)' : 'Offline (Laptop is Off)')
+                                              : (isOnline ? 'Online' : 'Offline'),
                                           style: TextStyle(
                                             color: isOnline ? const Color(0xFF10B981) : const Color(0xFFEF4444),
                                             fontSize: 10,
@@ -2956,7 +2971,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             minHeight: 5,
                             backgroundColor: Colors.white12,
                             valueColor: AlwaysStoppedAnimation(
-                              isCloud ? const Color(0xFF3B82F6) : const Color(0xFF10B981),
+                              isCloud
+                                  ? const Color(0xFF3B82F6)
+                                  : isLaptopNode
+                                      ? (isOnline ? const Color(0xFF8B5CF6) : const Color(0xFF6B7280))
+                                      : const Color(0xFF10B981),
                             ),
                           ),
                         ),
@@ -2974,6 +2993,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ],
                         ),
+                        if (isLaptopNode && !isOnline) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEF4444).withAlpha(15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFFEF4444).withAlpha(40)),
+                            ),
+                            child: Row(
+                              children: const [
+                                Icon(Icons.power_off_rounded, size: 14, color: Color(0xFFF87171)),
+                                SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'Laptop is offline. Turn on your laptop to stream or download these files.',
+                                    style: TextStyle(color: Color(0xFFFCA5A5), fontSize: 10),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -4380,6 +4422,28 @@ class _AddVolumeSheetState extends State<_AddVolumeSheet> {
             const Text(
               '💾 Add Storage Volume / Drive',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF3B82F6).withAlpha(50)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Icon(Icons.laptop_chromebook_rounded, color: Color(0xFF60A5FA), size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Connecting your Laptop D:\\ Drive? Run start_laptop_storage_node.bat on your laptop to link directly with automatic cloud buffer offloading.',
+                      style: TextStyle(color: Color(0xFF93C5FD), fontSize: 11, height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 14),
             TextField(
