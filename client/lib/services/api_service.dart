@@ -381,7 +381,7 @@ class ApiService {
 
   // Update existing storage volume
   static Future<Map<String, dynamic>> updateStorageVolume({
-    required String volumeId,
+    required dynamic volumeId,
     String? volumeName,
     String? mountPath,
     String? volumeType,
@@ -395,13 +395,13 @@ class ApiService {
   }
 
   // Remove / Unmount storage volume
-  static Future<Map<String, dynamic>> removeStorageVolume(String volumeId, {bool purgeFiles = true}) async {
+  static Future<Map<String, dynamic>> removeStorageVolume(dynamic volumeId, {bool purgeFiles = true}) async {
     final query = purgeFiles ? '?purge_files=1' : '';
     return _authRequest('DELETE', '/api/v1/storage/volumes/$volumeId$query');
   }
 
   // Scan & index files on storage volume
-  static Future<Map<String, dynamic>> scanStorageVolume(String volumeId) async {
+  static Future<Map<String, dynamic>> scanStorageVolume(dynamic volumeId) async {
     return _authRequest('POST', '/api/v1/storage/volumes/$volumeId/scan');
   }
 

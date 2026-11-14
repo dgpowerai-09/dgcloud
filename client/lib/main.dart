@@ -4287,20 +4287,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 if (val == 'remove') _confirmRemoveVolume(v);
                               },
                               itemBuilder: (ctx) => [
-                                const PopupMenuItem(
+                                PopupMenuItem<String>(
                                   value: 'scan',
                                   child: Row(
-                                    children: [
+                                    children: const [
                                       Icon(Icons.sync_rounded, color: Color(0xFF3B82F6), size: 18),
                                       SizedBox(width: 8),
                                       Text('Scan & Index Files', style: TextStyle(color: Colors.white, fontSize: 13)),
                                     ],
                                   ),
                                 ),
-                                const PopupMenuItem(
+                                PopupMenuItem<String>(
                                   value: 'edit',
                                   child: Row(
-                                    children: [
+                                    children: const [
                                       Icon(Icons.edit_rounded, color: Color(0xFFF59E0B), size: 18),
                                       SizedBox(width: 8),
                                       Text('Edit Drive', style: TextStyle(color: Colors.white, fontSize: 13)),
@@ -4308,10 +4308,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ),
                                 ),
                                 if (!isCloud)
-                                  const PopupMenuItem(
+                                  PopupMenuItem<String>(
                                     value: 'remove',
                                     child: Row(
-                                      children: [
+                                      children: const [
                                         Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 18),
                                         SizedBox(width: 8),
                                         Text('Unmount Drive', style: TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
@@ -10439,7 +10439,7 @@ class _EditVolumeSheetState extends State<_EditVolumeSheet> {
     });
 
     try {
-      final volId = (widget.volume['id'] as num).toInt();
+      final volId = (widget.volume['id'] ?? '').toString();
       await ApiService.updateStorageVolume(
         volumeId: volId,
         volumeName: name,
