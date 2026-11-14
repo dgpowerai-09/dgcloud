@@ -364,12 +364,45 @@ class ApiService {
   static Future<Map<String, dynamic>> addStorageVolume({
     required String volumeName,
     required String mountPath,
+    String volumeType = 'local_hdd',
+    bool autoScan = true,
   }) async {
     return _authRequest(
       'POST',
       '/api/v1/storage/volumes',
-      body: {'volumeName': volumeName, 'mountPath': mountPath},
+      body: {
+        'volumeName': volumeName,
+        'mountPath': mountPath,
+        'volumeType': volumeType,
+        'autoScan': autoScan,
+      },
     );
+  }
+
+  // Update existing storage volume
+  static Future<Map<String, dynamic>> updateStorageVolume({
+    required String volumeId,
+    String? volumeName,
+    String? mountPath,
+    String? volumeType,
+  }) async {
+    final body = <String, dynamic>{};
+    if (volumeName != null && volumeName.isNotEmpty) body['volumeName'] = volumeName;
+    if (mountPath != null && mountPath.isNotEmpty) body['mountPath'] = mountPath;
+    if (volumeType != null && volumeType.isNotEmpty) body['volumeType'] = volumeType;
+
+    return _authRequest('PUT', '/api/v1/storage/volumes/$volumeId', body: body);
+  }
+
+  // Remove / Unmount storage volume
+  static Future<Map<String, dynamic>> removeStorageVolume(String volumeId, {bool purgeFiles = true}) async {
+    final query = purgeFiles ? '?purge_files=1' : '';
+    return _authRequest('DELETE', '/api/v1/storage/volumes/$volumeId$query');
+  }
+
+  // Scan & index files on storage volume
+  static Future<Map<String, dynamic>> scanStorageVolume(String volumeId) async {
+    return _authRequest('POST', '/api/v1/storage/volumes/$volumeId/scan');
   }
 
   // Run Storage Cleaner & Duplicate Scanner
